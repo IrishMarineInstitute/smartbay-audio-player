@@ -72,7 +72,7 @@ var SmartbayAudioPlayer = function(el, options) {
 	volumeControl.addEventListener('input',
 		function() {
 			var fraction = parseInt(this.value) / parseInt(this.max);
-			player.context.gainNode.gain.value = fraction * 20.0;
+			player.context.gainNode.gain.setTargetAtTime(fraction * 20.0, 0, 0.2);
 		});
 
 	div2.appendChild(volumeControl);
@@ -89,7 +89,8 @@ var SmartbayAudioPlayer = function(el, options) {
 
 	this.context = new AudioContext();
 	this.context.gainNode = this.context.createGain();
-	this.context.gainNode.gain.value = 2.5;
+	this.context.gainNode.gain.setTargetAtTime(2.5, 0, 0.2);
+
 
 	this.context.gainNode.connect(this.context.destination);
 
@@ -193,14 +194,18 @@ SmartbayAudioPlayer.prototype.loadNextRecording = function() {
 						try {
 							player.loadSound(hrefs[index]);
 						} catch (e) {
-							console.log(e);
+							player.debug(e);
 							setTimeout(player.loadNextRecording.bind(player), 2000);
 						}
 					} else {
 						setTimeout(player.loadNextRecording.bind(player), 5000);
 					}
 				} else {
-					player.loadSound(hrefs[hrefs.length - (hrefs.length > 1 ? 2 : 1)]);
+					try {
+						player.loadSound(hrefs[hrefs.length - (hrefs.length > 1 ? 2 : 1)]);
+					} catch (e) {
+						player.debug(e);
+					}
 				}
 			} else {
 				player.showError("no wav files found");
@@ -289,13 +294,11 @@ SmartbayAudioPlayer.prototype.loadSound = function(url) {
 	var player = this;
 	var request = new XMLHttpRequest();
 	request.open('GET', url, true);
-	request.responseType = 'arraybuffer';
+	request.responseType = 'blob'; //'arraybuffer';
 
 	// When loaded decode the data
 	request.onload = function() {
-
-		// decode the data
-		player.context.decodeAudioData(request.response, function(buffer) {
+		var audioHandler = function(buffer) {
 			player.showError();
 			node = player.createSourceNode();
 			if (player.sourceNode == null || player.currentRecording.url == null || player.currentRecording.url == url) {
@@ -307,7 +310,28 @@ SmartbayAudioPlayer.prototype.loadSound = function(url) {
 					buffer: buffer
 				}
 			}
-		}, player.showError.bind(player));
+		};
+		var blobReader = new FileReader();
+		var blob = request.response;
+		blobReader.onload = function() {
+			var arrayBuffer = this.result;
+			player.context.decodeAudioData(arrayBuffer, audioHandler, function(e) {
+				player.debug("Data not decoded:" + e + ". will try downsampling.");
+				player.downsample(blob).then(function(resampled) {
+					player.debug("Downsampling complete");
+					player.context.decodeAudioData(resampled, audioHandler, function(e2) {
+						player.debug("Could not parse downsampled data" + e2);
+						player.showError(e);
+					});
+				});
+			});
+		};
+		blobReader.onError = function() {
+			//handled.
+		};
+		blobReader.readAsArrayBuffer(blob);
+		//		player.debug("got "+request.response.byteLength+" bytes");
+		// decode the data
 	}
 	request.send();
 }
@@ -342,5 +366,68 @@ SmartbayAudioPlayer.prototype.drawSpectrogram = function(array) {
 	this.ctx.putImageData(imageData, -1, 0);
 
 	this.ctx.drawImage(this.tempCanvas, 0, 0, 1, al, this.canvasWidth - 1, 0, 1, this.canvasHeight);
+
+}
+
+SmartbayAudioPlayer.prototype.downsample = function(blob) {
+	return new Promise(function(resolve, reject) {
+		var blobReader = new FileReader();
+		blobReader.onloadend = function() {
+			var readView = new DataView(this.result);
+			//TODO verify it's a wav.
+			if (readView.getUint32(0, true) != 1179011410 ||
+				readView.getUint32(8, true) != 1163280727 ||
+				readView.getUint32(12, true) != 544501094 ||
+				readView.getUint32(36, true) != 1635017060) {
+				reject(Error("File not appear to be a wav"));
+				return;
+			}
+			if (readView.getUint32(16, true) != 16 ||
+				readView.getUint16(20, true) != 1) {
+				reject(Error("The wav format is not supported"));
+				return;
+			}
+			var bitsPerSample = readView.getUint16(34, true);
+			var sampleRate = readView.getUint32(24, true) / 2;
+			var numChannels = readView.getUint16(22, true);
+			var dataLength = readView.getUint32(40, true) / 2;
+			var headerLength = 44;
+			var buffer = new ArrayBuffer(headerLength + dataLength);
+			var writeView = new DataView(buffer);
+			writeView.setUint32(0, 1179011410, true); // byte 00, 4 bytes, RIFF Header
+			writeView.setUint32(4, 36 + dataLength, true); // byte 04, 4 bytes, RIFF Chunk Size
+			writeView.setUint32(8, 1163280727, true); // byte 08, 4 bytes, WAVE Header
+			writeView.setUint32(12, 544501094, true); // byte 12, 4 bytes, FMT header
+			writeView.setUint32(16, 16, true); // byte 16, 4 bytes, Size of the fmt chunk
+			writeView.setUint16(20, 1, true); // byte 20, 2 bytes, Audio format 1=PCM,6=mulaw,7=alaw, 257=IBM Mu-Law, 258=IBM A-Law, 259=ADPCM
+			writeView.setUint16(22, numChannels, true); // byte 22, 2 bytes, Number of channels 1=Mono 2=Sterio
+			writeView.setUint32(24, sampleRate, true); // byte 24, 4 bytes, Sampling Frequency in Hz
+			writeView.setUint32(28, sampleRate * numChannels * bitsPerSample / 8, true); // byte 28, 4 bytes, == SampleRate * NumChannels * BitsPerSample/8
+			//nBlockAlign
+			writeView.setUint16(32, numChannels * bitsPerSample / 8, true); // byte 32, 2 bytes, == NumChannels * BitsPerSample/8
+			writeView.setUint16(34, bitsPerSample, true); // byte 34, 2 bytes, Number of bits per sample
+			writeView.setUint32(36, 1635017060, true); // byte 36, 4 bytes, "data"  string
+			writeView.setUint32(40, dataLength, true);
+			var bytesPerSample = bitsPerSample / 8;
+			var nblocks = dataLength / bytesPerSample;
+			var pout = headerLength;
+			var worker = function(start, limit) {
+				var loop = 0;
+				for (var block = start; block < nblocks; block++) {
+					if (loop++ > limit) {
+						setTimeout(worker.bind(null, block, limit), 0);
+						return;
+					}
+					var pin = (2 * block * bytesPerSample) + headerLength;
+					for (var i = 0; i < bytesPerSample; i++) {
+						writeView.setUint8(pout++, readView.getUint8(pin++));
+					}
+				}
+				resolve(writeView.buffer);
+			};
+			worker(0, 10000);
+		}
+		blobReader.readAsArrayBuffer(blob);
+	});
 
 }
