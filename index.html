@@ -13,6 +13,8 @@
 	<h1>Smartbay Audio Player</h1>
 	<p class="lead">Listen live to sounds beneath Galway Bay</p>
 	<div id='player'></div>
+	<button id="smaller">-</button>
+	<button id="bigger">+</button>
 
 	<p>To find out more, visit <a href="//smartbay.marine.ie/">smartbay.marine.ie</a>.</p>
 
@@ -25,7 +27,14 @@
 			width: 400,
 			debug: false
 		});
+		document.getElementById("bigger").addEventListener('click',function(){
+			player.bigger();
+		});
+		document.getElementById("smaller").addEventListener('click',function(){
+			player.smaller();
+		});
 	</script>
+
 
 </body>
 

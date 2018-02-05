@@ -161,7 +161,22 @@ var SmartbayAudioPlayer = function(el, options) {
 
 	this.setupAudioNodes();
 }
-
+SmartbayAudioPlayer.prototype.resize = function(width,height){
+	var image = new Image();
+	var player = this;
+	image.onload = function() {
+		player.ctx.canvas.width = player.canvasWidth = player.options.width = width;
+		player.ctx.canvas.height = player.canvasHeight = player.options.height = height;
+		player.ctx.drawImage(this, 0, 0, width, height);
+	};
+	image.src = this.ctx.canvas.toDataURL();
+}
+SmartbayAudioPlayer.prototype.bigger = function(){
+	this.resize(Math.floor(this.options.width * 1.25),Math.floor(this.options.height * 1.25));
+}
+SmartbayAudioPlayer.prototype.smaller = function(width,height){
+	this.resize(Math.ceil(this.options.width * 4/5),Math.ceil(this.options.height * 4/5));
+}
 SmartbayAudioPlayer.prototype.drawPlayButton = function() {
 	//https://stackoverflow.com/questions/24621286/draw-a-play-button-on-canvas-in-javascript-triangle-in-a-circle
 	var w = this.options.width;
